@@ -1,0 +1,277 @@
+"use client";
+import { Space_Grotesk } from "next/font/google";
+import { useParams } from "next/navigation";
+import { useEffect, useState } from "react";
+import { useRoomState } from "../../../lib/useRoomState";
+
+const space = Space_Grotesk({ subsets: ["latin"] });
+
+export default function HostRoom() {
+  const { code } = useParams<{ code: string }>();
+  const { state, send, ws } = useRoomState();
+  const players = state?.players ?? [];
+  const submissions = state?.submissions ?? {};
+  const submittedCount = Object.keys(submissions).length;
+  const [shareUrl, setShareUrl] = useState("");
+
+  useEffect(() => {
+    setShareUrl(`${window.location.origin}/play/${code}`);
+  }, [code]);
+
+  useEffect(() => {
+    if (!code) return;
+    const tryWatch = () => {
+      send({ type: "host.claim", code });
+      send({ type: "room.watch", code });
+    };
+    if (!ws) return;
+    if (ws.readyState === WebSocket.OPEN) {
+      tryWatch();
+      return;
+    }
+    ws.addEventListener("open", tryWatch);
+    return () => ws.removeEventListener("open", tryWatch);
+  }, [code, send, ws]);
+
+  return (
+    <main className={`page ${space.className}`}>
+      <header className="hero">
+        <div>
+          <p className="eyebrow">Host Room</p>
+          <h1 className="title">
+            Code <span className="code">{code}</span>
+          </h1>
+          <p className="subtle">Players join at</p>
+          <div className="share">{shareUrl}</div>
+        </div>
+        <div className="stats">
+          <div>
+            <p className="stat-label">Players</p>
+            <p className="stat-value">{players.length}</p>
+          </div>
+          <div>
+            <p className="stat-label">Submitted</p>
+            <p className="stat-value">
+              {submittedCount}/{players.length || 1}
+            </p>
+          </div>
+        </div>
+      </header>
+
+      {state?.phase === "lobby" && (
+        <section className="card">
+          <div className="card-header">
+            <h2>Lobby</h2>
+            <button onClick={() => send({ type: "host.start", code })} disabled={players.length < 1}>
+              Start Round
+            </button>
+          </div>
+          {players.length === 0 ? (
+            <p className="empty">Waiting for players…</p>
+          ) : (
+            <div className="player-grid">
+              {players.map((p: any) => (
+                <div key={p.id} className="player">
+                  <span className="avatar">{p.name.slice(0, 1).toUpperCase()}</span>
+                  <span className="name">{p.name}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
+      )}
+
+      {state?.phase === "prompt" && (
+        <section className="card">
+          <div className="card-header">
+            <h2>Word Wall</h2>
+            <button onClick={() => send({ type: "host.start", code })}>New Prompt</button>
+          </div>
+          <p className="prompt">{state.prompt}</p>
+          {submittedCount === 0 ? (
+            <p className="empty">No words yet. The wall is waiting.</p>
+          ) : (
+            <div className="wall">
+              {Object.entries(submissions as Record<string, string>).map(([playerId, text]) => {
+                const player = players.find((p: any) => p.id === playerId);
+                return (
+                  <div key={playerId} className="word">
+                    <span className="word-text">{text}</span>
+                    <span className="word-by">{player?.name ?? "Unknown"}</span>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </section>
+      )}
+
+      <style jsx>{`
+        :global(body) {
+          margin: 0;
+          background: radial-gradient(circle at top, #f8f4ff, #fef7ed 55%, #f6fbff);
+          color: #161319;
+        }
+        .page {
+          min-height: 100vh;
+          padding: 32px 28px 48px;
+          display: flex;
+          flex-direction: column;
+          gap: 24px;
+        }
+        .hero {
+          display: flex;
+          justify-content: space-between;
+          align-items: flex-start;
+          gap: 24px;
+          flex-wrap: wrap;
+        }
+        .eyebrow {
+          letter-spacing: 0.2em;
+          text-transform: uppercase;
+          font-size: 12px;
+          margin: 0 0 8px;
+        }
+        .title {
+          font-size: clamp(28px, 5vw, 44px);
+          margin: 0 0 8px;
+        }
+        .code {
+          background: #161319;
+          color: #fef7ed;
+          padding: 6px 12px;
+          border-radius: 999px;
+          font-weight: 700;
+        }
+        .subtle {
+          margin: 0 0 6px;
+          color: #5a5661;
+        }
+        .share {
+          background: #ffffff;
+          border-radius: 12px;
+          padding: 10px 14px;
+          border: 1px solid #e8e2f2;
+          font-size: 14px;
+          word-break: break-all;
+        }
+        .stats {
+          display: flex;
+          gap: 16px;
+          background: #ffffff;
+          border: 1px solid #eee6f4;
+          border-radius: 16px;
+          padding: 16px 18px;
+          min-width: 220px;
+        }
+        .stat-label {
+          margin: 0;
+          font-size: 12px;
+          text-transform: uppercase;
+          letter-spacing: 0.12em;
+          color: #6c6772;
+        }
+        .stat-value {
+          margin: 6px 0 0;
+          font-size: 24px;
+          font-weight: 700;
+        }
+        .card {
+          background: #ffffff;
+          border: 1px solid #f0e7f6;
+          border-radius: 20px;
+          padding: 24px;
+          box-shadow: 0 18px 40px rgba(23, 15, 44, 0.06);
+        }
+        .card-header {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          gap: 12px;
+        }
+        h2 {
+          margin: 0;
+          font-size: 24px;
+        }
+        button {
+          border: none;
+          background: #161319;
+          color: #fef7ed;
+          padding: 10px 18px;
+          border-radius: 999px;
+          font-weight: 600;
+          cursor: pointer;
+        }
+        button:disabled {
+          opacity: 0.5;
+          cursor: not-allowed;
+        }
+        .player-grid {
+          display: grid;
+          grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+          gap: 12px;
+          margin-top: 16px;
+        }
+        .player {
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          background: #f7f1ff;
+          padding: 10px 12px;
+          border-radius: 14px;
+        }
+        .avatar {
+          width: 32px;
+          height: 32px;
+          border-radius: 50%;
+          background: #161319;
+          color: #fef7ed;
+          display: grid;
+          place-items: center;
+          font-weight: 700;
+        }
+        .name {
+          font-weight: 600;
+        }
+        .prompt {
+          font-size: 20px;
+          margin: 14px 0 18px;
+        }
+        .wall {
+          display: grid;
+          grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+          gap: 14px;
+        }
+        .word {
+          background: #fef7ed;
+          border-radius: 16px;
+          padding: 14px 16px;
+          border: 1px solid #f4e2cc;
+          display: flex;
+          flex-direction: column;
+          gap: 8px;
+        }
+        .word-text {
+          font-size: 20px;
+          font-weight: 700;
+        }
+        .word-by {
+          font-size: 12px;
+          text-transform: uppercase;
+          letter-spacing: 0.12em;
+          color: #6c6772;
+        }
+        .empty {
+          margin-top: 16px;
+          color: #7b7482;
+        }
+        @media (max-width: 600px) {
+          .stats {
+            width: 100%;
+            justify-content: space-between;
+          }
+        }
+      `}</style>
+    </main>
+  );
+}
