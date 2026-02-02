@@ -1,32 +1,41 @@
 "use client";
 import { Space_Grotesk } from "next/font/google";
 import { useParams } from "next/navigation";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import type { Types } from "ably";
-import { useRoomState } from "../../../lib/useRoomState";
+import { type GamePlayer, type Mark, useRoomState } from "../../../lib/useRoomState";
 
 const space = Space_Grotesk({ subsets: ["latin"] });
 
-const PROMPTS = [
-  "Write one word that describes your day.",
-  "Write one word a villain would put on a welcome mat.",
-  "Write one word you'd never want to hear a doctor say.",
-  "Write one word that belongs in a space adventure.",
-  "Write one word that sounds like a dance move.",
-  "Write one word your pet is secretly thinking.",
-];
+const EMPTY_BOARD = Array.from({ length: 9 }, () => null as Mark | null);
 
-function pickPrompt() {
-  return PROMPTS[Math.floor(Math.random() * PROMPTS.length)];
+function checkWinner(board: (Mark | null)[]) {
+  const lines = [
+    [0, 1, 2],
+    [3, 4, 5],
+    [6, 7, 8],
+    [0, 3, 6],
+    [1, 4, 7],
+    [2, 5, 8],
+    [0, 4, 8],
+    [2, 4, 6],
+  ];
+  for (const [a, b, c] of lines) {
+    if (board[a] && board[a] === board[b] && board[a] === board[c]) return board[a];
+  }
+  if (board.every((cell) => cell)) return "draw";
+  return null;
 }
 
 export default function HostRoom() {
   const { code } = useParams<{ code: string }>();
   const { state, setState, channel, publishState } = useRoomState(code);
   const players = state?.players ?? [];
-  const submissions = state?.phase === "prompt" ? state.submissions : {};
-  const submittedCount = Object.keys(submissions).length;
+  const gamePlayers = state?.phase === "lobby" ? [] : state?.players ?? [];
   const [shareUrl, setShareUrl] = useState("");
+  const board = state?.phase === "lobby" ? EMPTY_BOARD : state?.board ?? EMPTY_BOARD;
+  const turn = state?.phase === "lobby" ? null : state?.turn ?? null;
+  const winner = state?.phase === "lobby" ? null : state?.winner ?? null;
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -65,6 +74,7 @@ export default function HostRoom() {
             players: [],
           } as const);
         if (base.players.some((p) => p.id === playerId)) return base;
+        if (base.players.length >= 2) return base;
         const nextPlayers = [...base.players, { id: playerId, name }];
         if (base.phase === "lobby") {
           return { ...base, players: nextPlayers };
@@ -72,36 +82,86 @@ export default function HostRoom() {
         return { ...base, players: nextPlayers };
       });
     };
-    const onSubmit = (msg: Types.Message) => {
-      const data = msg.data as { playerId?: string; text?: string } | null;
+    const onMove = (msg: Types.Message) => {
+      const data = msg.data as { playerId?: string; index?: number } | null;
       const playerId = data?.playerId;
-      const text = data?.text?.trim();
-      if (!playerId || !text) return;
+      const index = data?.index;
+      if (!playerId || index === undefined) return;
       updateState((current) => {
-        if (!current || current.phase !== "prompt") return current;
-        if (!current.players.some((p) => p.id === playerId)) return current;
-        return { ...current, submissions: { ...current.submissions, [playerId]: text } };
+        if (!current || current.phase !== "playing") return current;
+        const player = current.players.find((p) => p.id === playerId);
+        if (!player) return current;
+        if (player.mark !== current.turn) return current;
+        if (current.board[index]) return current;
+        const nextBoard = [...current.board];
+        nextBoard[index] = player.mark;
+        const result = checkWinner(nextBoard);
+        if (result) {
+          return {
+            ...current,
+            board: nextBoard,
+            winner: result,
+            phase: "over",
+          };
+        }
+        return {
+          ...current,
+          board: nextBoard,
+          turn: current.turn === "X" ? "O" : "X",
+        };
       });
     };
     channel.subscribe("player.join", onJoin);
-    channel.subscribe("player.submit", onSubmit);
+    channel.subscribe("player.move", onMove);
     return () => {
       channel.unsubscribe("player.join", onJoin);
-      channel.unsubscribe("player.submit", onSubmit);
+      channel.unsubscribe("player.move", onMove);
     };
   }, [channel, code, updateState]);
 
-  const startRound = useCallback(() => {
+  const canStart = players.length === 2;
+  const startGame = useCallback(() => {
     if (!code) return;
-    const base = state ?? { phase: "lobby", code, players: [] };
+    if (players.length < 2) return;
+    const assigned: GamePlayer[] = [
+      { ...players[0], mark: "X" },
+      { ...players[1], mark: "O" },
+    ];
     publishState({
-      phase: "prompt",
+      phase: "playing",
       code,
-      prompt: pickPrompt(),
-      submissions: {},
-      players: base.players,
+      players: assigned,
+      board: [...EMPTY_BOARD],
+      turn: "X",
+      winner: null,
+    });
+  }, [code, players, publishState]);
+
+  const playAgain = useCallback(() => {
+    if (!code) return;
+    if (state?.phase === "lobby") return;
+    const assigned = state?.players ?? [];
+    if (assigned.length < 2) {
+      publishState({ phase: "lobby", code, players: assigned.map(({ id, name }) => ({ id, name })) });
+      return;
+    }
+    publishState({
+      phase: "playing",
+      code,
+      players: assigned,
+      board: [...EMPTY_BOARD],
+      turn: "X",
+      winner: null,
     });
   }, [code, publishState, state]);
+
+  const status = useMemo(() => {
+    if (!state) return "Waiting for players…";
+    if (state.phase === "lobby") return "Waiting for 2 players.";
+    if (state.phase === "playing") return `Turn: ${state.turn}`;
+    if (state.winner === "draw") return "Draw!";
+    return `Winner: ${state.winner}`;
+  }, [state]);
 
   return (
     <main className={`page ${space.className}`}>
@@ -120,10 +180,8 @@ export default function HostRoom() {
             <p className="stat-value">{players.length}</p>
           </div>
           <div>
-            <p className="stat-label">Submitted</p>
-            <p className="stat-value">
-              {submittedCount}/{players.length || 1}
-            </p>
+            <p className="stat-label">Status</p>
+            <p className="stat-value">{state?.phase === "lobby" ? "Lobby" : "Game"}</p>
           </div>
         </div>
       </header>
@@ -132,8 +190,8 @@ export default function HostRoom() {
         <section className="card">
           <div className="card-header">
             <h2>Lobby</h2>
-            <button onClick={startRound} disabled={players.length < 1 || !channel}>
-              Start Round
+            <button onClick={startGame} disabled={!canStart || !channel}>
+              Start Game
             </button>
           </div>
           {players.length === 0 ? (
@@ -151,28 +209,30 @@ export default function HostRoom() {
         </section>
       )}
 
-      {state?.phase === "prompt" && (
+      {state?.phase !== "lobby" && (
         <section className="card">
           <div className="card-header">
-            <h2>Word Wall</h2>
-            <button onClick={startRound}>New Prompt</button>
+            <h2>Tic Tac Toe</h2>
+            <button onClick={playAgain} disabled={!channel}>
+              New Game
+            </button>
           </div>
-          <p className="prompt">{state.prompt}</p>
-          {submittedCount === 0 ? (
-            <p className="empty">No words yet. The wall is waiting.</p>
-          ) : (
-            <div className="wall">
-              {Object.entries(submissions as Record<string, string>).map(([playerId, text]) => {
-                const player = players.find((p: any) => p.id === playerId);
-                return (
-                  <div key={playerId} className="word">
-                    <span className="word-text">{text}</span>
-                    <span className="word-by">{player?.name ?? "Unknown"}</span>
-                  </div>
-                );
-              })}
-            </div>
-          )}
+          <p className="prompt">{status}</p>
+          <div className="board">
+            {board.map((cell, idx) => (
+              <div key={idx} className={`cell ${cell ? "filled" : ""}`}>
+                {cell ?? ""}
+              </div>
+            ))}
+          </div>
+          <div className="legend">
+            {gamePlayers.map((p) => (
+              <div key={p.id} className="legend-row">
+                <span className="legend-mark">{p.mark}</span>
+                <span>{p.name}</span>
+              </div>
+            ))}
+          </div>
         </section>
       )}
 
@@ -307,29 +367,47 @@ export default function HostRoom() {
           font-size: 20px;
           margin: 14px 0 18px;
         }
-        .wall {
+        .board {
           display: grid;
-          grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-          gap: 14px;
+          grid-template-columns: repeat(3, minmax(80px, 120px));
+          gap: 10px;
+          justify-content: start;
         }
-        .word {
+        .cell {
           background: #fef7ed;
           border-radius: 16px;
-          padding: 14px 16px;
           border: 1px solid #f4e2cc;
-          display: flex;
-          flex-direction: column;
-          gap: 8px;
-        }
-        .word-text {
-          font-size: 20px;
+          font-size: 32px;
           font-weight: 700;
+          display: grid;
+          place-items: center;
+          height: 100px;
         }
-        .word-by {
-          font-size: 12px;
-          text-transform: uppercase;
-          letter-spacing: 0.12em;
-          color: #6c6772;
+        .cell.filled {
+          background: #f7f1ff;
+          border-color: #e3d6fb;
+        }
+        .legend {
+          display: flex;
+          gap: 18px;
+          margin-top: 18px;
+          flex-wrap: wrap;
+        }
+        .legend-row {
+          display: flex;
+          gap: 8px;
+          align-items: center;
+          background: #ffffff;
+          border: 1px solid #eee6f4;
+          border-radius: 999px;
+          padding: 6px 12px;
+        }
+        .legend-mark {
+          background: #161319;
+          color: #fef7ed;
+          font-weight: 700;
+          border-radius: 999px;
+          padding: 4px 8px;
         }
         .empty {
           margin-top: 16px;

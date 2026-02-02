@@ -4,9 +4,26 @@ import type { Types } from "ably";
 import { getRealtime } from "./ably-client";
 
 export type Player = { id: string; name: string };
+export type Mark = "X" | "O";
+export type GamePlayer = Player & { mark: Mark };
 export type RoomState =
   | { phase: "lobby"; code: string; players: Player[] }
-  | { phase: "prompt"; code: string; prompt: string; submissions: Record<string, string>; players: Player[] };
+  | {
+      phase: "playing";
+      code: string;
+      players: GamePlayer[];
+      board: (Mark | null)[];
+      turn: Mark;
+      winner: Mark | "draw" | null;
+    }
+  | {
+      phase: "over";
+      code: string;
+      players: GamePlayer[];
+      board: (Mark | null)[];
+      turn: Mark;
+      winner: Mark | "draw";
+    };
 
 export function useRoomState(code?: string) {
   const [state, setState] = useState<RoomState | null>(null);

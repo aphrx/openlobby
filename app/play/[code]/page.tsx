@@ -1,7 +1,7 @@
 "use client";
 import { Space_Grotesk } from "next/font/google";
 import { useParams } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { nanoid } from "nanoid";
 import { useRoomState } from "../../../lib/useRoomState";
 
@@ -12,23 +12,15 @@ export default function PlayRoom() {
   const { state, send, channel } = useRoomState(code);
   const [name, setName] = useState("");
   const [playerId, setPlayerId] = useState<string | null>(null);
-  const [text, setText] = useState("");
-  const [hasSubmitted, setHasSubmitted] = useState(false);
-  const prompt = state?.phase === "prompt" ? state.prompt : "";
-
-  useEffect(() => {
-    if (state?.phase !== "prompt") {
-      setHasSubmitted(false);
-      setText("");
-    }
-  }, [state?.phase]);
-
-  useEffect(() => {
-    if (state?.phase === "prompt") {
-      setHasSubmitted(false);
-      setText("");
-    }
-  }, [state?.phase, prompt]);
+  const board = state?.phase === "playing" || state?.phase === "over" ? state.board : Array.from({ length: 9 }, () => null);
+  const winner = state?.phase === "over" ? state.winner : null;
+  const myMark =
+    state?.phase === "playing" || state?.phase === "over"
+      ? state.players.find((p) => p.id === playerId)?.mark
+      : null;
+  const canMove = Boolean(
+    state?.phase === "playing" && myMark && state.turn === myMark && !winner,
+  );
 
   return (
     <main className={`page ${space.className}`}>
@@ -37,7 +29,7 @@ export default function PlayRoom() {
         <h1 className="title">
           Room <span className="code">{code}</span>
         </h1>
-        <p className="subtle">Write one word and watch it appear on the host screen.</p>
+        <p className="subtle">Play a quick game of Tic Tac Toe.</p>
       </header>
 
       {!playerId ? (
@@ -59,30 +51,31 @@ export default function PlayRoom() {
         </section>
       ) : (
         <section className="card">
-          <h2>{state?.phase === "prompt" ? "Your word" : "Waiting room"}</h2>
-          {state?.phase === "prompt" ? (
+          <h2>{state?.phase === "playing" || state?.phase === "over" ? "Your move" : "Waiting room"}</h2>
+          {state?.phase === "playing" || state?.phase === "over" ? (
             <>
-              <p className="prompt">{state.prompt}</p>
-              <div className="field">
-                <input
-                  value={text}
-                  onChange={(e) => setText(e.target.value)}
-                  placeholder="One word"
-                  disabled={hasSubmitted}
-                />
-                <button
-                  onClick={() => {
-                    send("player.submit", { playerId, text });
-                    setHasSubmitted(true);
-                  }}
-                  disabled={!text.trim() || hasSubmitted}
-                >
-                  {hasSubmitted ? "Submitted" : "Send"}
-                </button>
+              <p className="prompt">
+                {winner ? (winner === "draw" ? "Draw!" : `Winner: ${winner}`) : `Turn: ${state.turn}`}
+              </p>
+              <div className="board">
+                {board.map((cell, idx) => (
+                  <button
+                    key={idx}
+                    className={`cell ${cell ? "filled" : ""}`}
+                    onClick={() => {
+                      if (!canMove || cell || !playerId) return;
+                      send("player.move", { playerId, index: idx });
+                    }}
+                    disabled={!canMove || Boolean(cell)}
+                  >
+                    {cell ?? ""}
+                  </button>
+                ))}
               </div>
+              {myMark && <p className="subtle">You are {myMark}</p>}
             </>
           ) : (
-            <p className="subtle">Hang tight while the host starts the round.</p>
+            <p className="subtle">Hang tight while the host starts the game.</p>
           )}
         </section>
       )}
@@ -140,6 +133,32 @@ export default function PlayRoom() {
         .prompt {
           font-size: 20px;
           margin: 0 0 16px;
+        }
+        .board {
+          display: grid;
+          grid-template-columns: repeat(3, minmax(80px, 110px));
+          gap: 10px;
+          justify-content: start;
+          margin-bottom: 12px;
+        }
+        .cell {
+          background: #fef7ed;
+          border-radius: 16px;
+          border: 1px solid #f4e2cc;
+          font-size: 32px;
+          font-weight: 700;
+          display: grid;
+          place-items: center;
+          height: 90px;
+          cursor: pointer;
+        }
+        .cell:disabled {
+          cursor: not-allowed;
+          opacity: 0.8;
+        }
+        .cell.filled {
+          background: #f7f1ff;
+          border-color: #e3d6fb;
         }
         .field {
           display: flex;
