@@ -1,48 +1,57 @@
 "use client";
-import { useEffect, useMemo, useRef, useState } from "react";
-import { makeWS } from "./ws";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import type { Types } from "ably";
+import { getRealtime } from "./ably-client";
 
-export function useRoomState() {
-  const [ws, setWs] = useState<WebSocket | null>(null);
-  const [state, setState] = useState<any>(null);
-  const [playerId, setPlayerId] = useState<string | null>(null);
-  const pending = useRef<string[]>([]);
+export type Player = { id: string; name: string };
+export type RoomState =
+  | { phase: "lobby"; code: string; players: Player[] }
+  | { phase: "prompt"; code: string; prompt: string; submissions: Record<string, string>; players: Player[] };
+
+export function useRoomState(code?: string) {
+  const [state, setState] = useState<RoomState | null>(null);
+  const [channel, setChannel] = useState<Types.RealtimeChannelCallbacks | null>(null);
 
   useEffect(() => {
-    const socket = makeWS();
-    const flush = () => {
-      while (pending.current.length > 0) {
-        const next = pending.current.shift();
-        if (next) socket.send(next);
-      }
+    if (!code) return;
+    const realtime = getRealtime();
+    const roomChannel = realtime.channels.get(`room:${code}`);
+    setChannel(roomChannel);
+    const onState = (msg: Types.Message) => {
+      setState(msg.data as RoomState);
     };
-    socket.addEventListener("open", flush);
-    socket.onmessage = (ev) => {
-      const msg = JSON.parse(ev.data);
-      if (msg.type === "state.update") setState(msg.state);
-      if (msg.type === "joined") setPlayerId(msg.playerId);
-    };
-    setWs(socket);
+    roomChannel.subscribe("state.update", onState);
     return () => {
-      socket.removeEventListener("open", flush);
-      socket.close();
+      roomChannel.unsubscribe("state.update", onState);
+      roomChannel.detach();
     };
-  }, []);
+  }, [code]);
 
-  const send = useMemo(() => {
-    return (data: any) => {
-      const payload = JSON.stringify(data);
-      if (!ws) {
-        pending.current.push(payload);
-        return;
-      }
-      if (ws.readyState === WebSocket.OPEN) {
-        ws.send(payload);
-        return;
-      }
-      pending.current.push(payload);
-    };
-  }, [ws]);
+  const send = useCallback(
+    (name: string, data: unknown) => {
+      if (!channel) return;
+      channel.publish(name, data);
+    },
+    [channel],
+  );
 
-  return { ws, state, playerId, send };
+  const publishState = useCallback(
+    (nextState: RoomState) => {
+      setState(nextState);
+      if (!channel) return;
+      channel.publish("state.update", nextState);
+    },
+    [channel],
+  );
+
+  return useMemo(
+    () => ({
+      state,
+      setState,
+      channel,
+      send,
+      publishState,
+    }),
+    [state, channel, send, publishState],
+  );
 }

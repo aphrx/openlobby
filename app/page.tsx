@@ -1,47 +1,26 @@
 "use client";
 import { Space_Grotesk } from "next/font/google";
 import { useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
-import { makeWS } from "../lib/ws";
+import { useState } from "react";
 
 const space = Space_Grotesk({ subsets: ["latin"] });
 
+const CODE_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+function makeCode() {
+  let result = "";
+  for (let i = 0; i < 4; i += 1) {
+    result += CODE_CHARS[Math.floor(Math.random() * CODE_CHARS.length)];
+  }
+  return result;
+}
+
 export default function Home() {
   const [code, setCode] = useState("");
-  const [ws, setWs] = useState<WebSocket | null>(null);
-  const [creating, setCreating] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const r = useRouter();
 
-  useEffect(() => {
-    const socket = makeWS();
-    socket.onmessage = (ev) => {
-      const msg = JSON.parse(ev.data);
-      if (msg.type === "room.created") {
-        setCreating(false);
-        r.push(`/host/${msg.code}`);
-      }
-      if (msg.type === "error") {
-        setCreating(false);
-        setError(msg.message ?? "Something went wrong.");
-      }
-    };
-    socket.onerror = () => {
-      setCreating(false);
-      setError("WebSocket connection failed. Is the server running?");
-    };
-    setWs(socket);
-    return () => socket.close();
-  }, [r]);
-
   const createRoom = () => {
-    if (!ws || ws.readyState !== WebSocket.OPEN) {
-      setError("WebSocket not connected yet. Try again in a second.");
-      return;
-    }
-    setError(null);
-    setCreating(true);
-    ws.send(JSON.stringify({ type: "host.create" }));
+    const newCode = makeCode();
+    r.push(`/host/${newCode}`);
   };
 
   return (
@@ -69,10 +48,7 @@ export default function Home() {
       <section className="card highlight">
         <h2>Host a room</h2>
         <p className="subtle">We’ll make a fresh code and drop you into the host screen.</p>
-        <button onClick={createRoom} disabled={creating}>
-          {creating ? "Creating..." : "Create Room"}
-        </button>
-        {error && <p className="error">{error}</p>}
+        <button onClick={createRoom}>Create Room</button>
       </section>
 
       <style jsx>{`
@@ -150,11 +126,6 @@ export default function Home() {
         button:disabled {
           opacity: 0.6;
           cursor: not-allowed;
-        }
-        .error {
-          margin: 12px 0 0;
-          color: #8a2d2d;
-          font-size: 14px;
         }
       `}</style>
     </main>

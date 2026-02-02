@@ -2,16 +2,19 @@
 import { Space_Grotesk } from "next/font/google";
 import { useParams } from "next/navigation";
 import { useEffect, useState } from "react";
+import { nanoid } from "nanoid";
 import { useRoomState } from "../../../lib/useRoomState";
 
 const space = Space_Grotesk({ subsets: ["latin"] });
 
 export default function PlayRoom() {
   const { code } = useParams<{ code: string }>();
-  const { state, playerId, send } = useRoomState();
+  const { state, send, channel } = useRoomState(code);
   const [name, setName] = useState("");
+  const [playerId, setPlayerId] = useState<string | null>(null);
   const [text, setText] = useState("");
   const [hasSubmitted, setHasSubmitted] = useState(false);
+  const prompt = state?.phase === "prompt" ? state.prompt : "";
 
   useEffect(() => {
     if (state?.phase !== "prompt") {
@@ -25,7 +28,7 @@ export default function PlayRoom() {
       setHasSubmitted(false);
       setText("");
     }
-  }, [state?.prompt]);
+  }, [state?.phase, prompt]);
 
   return (
     <main className={`page ${space.className}`}>
@@ -42,7 +45,14 @@ export default function PlayRoom() {
           <h2>Join the room</h2>
           <div className="field">
             <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Your name" />
-            <button onClick={() => send({ type: "room.join", code, name })} disabled={!name.trim()}>
+            <button
+              onClick={() => {
+                const id = nanoid(10);
+                setPlayerId(id);
+                send("player.join", { playerId: id, name });
+              }}
+              disabled={!name.trim() || !channel}
+            >
               Join
             </button>
           </div>
@@ -62,7 +72,7 @@ export default function PlayRoom() {
                 />
                 <button
                   onClick={() => {
-                    send({ type: "game.submit", code, playerId, text });
+                    send("player.submit", { playerId, text });
                     setHasSubmitted(true);
                   }}
                   disabled={!text.trim() || hasSubmitted}

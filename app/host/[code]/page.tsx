@@ -1,37 +1,107 @@
 "use client";
 import { Space_Grotesk } from "next/font/google";
 import { useParams } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
+import type { Types } from "ably";
 import { useRoomState } from "../../../lib/useRoomState";
 
 const space = Space_Grotesk({ subsets: ["latin"] });
 
+const PROMPTS = [
+  "Write one word that describes your day.",
+  "Write one word a villain would put on a welcome mat.",
+  "Write one word you'd never want to hear a doctor say.",
+  "Write one word that belongs in a space adventure.",
+  "Write one word that sounds like a dance move.",
+  "Write one word your pet is secretly thinking.",
+];
+
+function pickPrompt() {
+  return PROMPTS[Math.floor(Math.random() * PROMPTS.length)];
+}
+
 export default function HostRoom() {
   const { code } = useParams<{ code: string }>();
-  const { state, send, ws } = useRoomState();
+  const { state, setState, channel, publishState } = useRoomState(code);
   const players = state?.players ?? [];
-  const submissions = state?.submissions ?? {};
+  const submissions = state?.phase === "prompt" ? state.submissions : {};
   const submittedCount = Object.keys(submissions).length;
   const [shareUrl, setShareUrl] = useState("");
 
   useEffect(() => {
+    if (typeof window === "undefined") return;
     setShareUrl(`${window.location.origin}/play/${code}`);
   }, [code]);
 
   useEffect(() => {
-    if (!code) return;
-    const tryWatch = () => {
-      send({ type: "host.claim", code });
-      send({ type: "room.watch", code });
+    if (!channel || !code || state) return;
+    publishState({ phase: "lobby", code, players: [] });
+  }, [channel, code, publishState, state]);
+
+  const updateState = useCallback(
+    (updater: (current: typeof state) => typeof state) => {
+      setState((current) => {
+        const next = updater(current);
+        if (next && channel) channel.publish("state.update", next);
+        return next;
+      });
+    },
+    [channel, setState],
+  );
+
+  useEffect(() => {
+    if (!channel || !code) return;
+    const onJoin = (msg: Types.Message) => {
+      const data = msg.data as { playerId?: string; name?: string } | null;
+      const playerId = data?.playerId;
+      const name = data?.name?.trim();
+      if (!playerId || !name) return;
+      updateState((current) => {
+        const base =
+          current ??
+          ({
+            phase: "lobby",
+            code,
+            players: [],
+          } as const);
+        if (base.players.some((p) => p.id === playerId)) return base;
+        const nextPlayers = [...base.players, { id: playerId, name }];
+        if (base.phase === "lobby") {
+          return { ...base, players: nextPlayers };
+        }
+        return { ...base, players: nextPlayers };
+      });
     };
-    if (!ws) return;
-    if (ws.readyState === WebSocket.OPEN) {
-      tryWatch();
-      return;
-    }
-    ws.addEventListener("open", tryWatch);
-    return () => ws.removeEventListener("open", tryWatch);
-  }, [code, send, ws]);
+    const onSubmit = (msg: Types.Message) => {
+      const data = msg.data as { playerId?: string; text?: string } | null;
+      const playerId = data?.playerId;
+      const text = data?.text?.trim();
+      if (!playerId || !text) return;
+      updateState((current) => {
+        if (!current || current.phase !== "prompt") return current;
+        if (!current.players.some((p) => p.id === playerId)) return current;
+        return { ...current, submissions: { ...current.submissions, [playerId]: text } };
+      });
+    };
+    channel.subscribe("player.join", onJoin);
+    channel.subscribe("player.submit", onSubmit);
+    return () => {
+      channel.unsubscribe("player.join", onJoin);
+      channel.unsubscribe("player.submit", onSubmit);
+    };
+  }, [channel, code, updateState]);
+
+  const startRound = useCallback(() => {
+    if (!code) return;
+    const base = state ?? { phase: "lobby", code, players: [] };
+    publishState({
+      phase: "prompt",
+      code,
+      prompt: pickPrompt(),
+      submissions: {},
+      players: base.players,
+    });
+  }, [code, publishState, state]);
 
   return (
     <main className={`page ${space.className}`}>
@@ -62,7 +132,7 @@ export default function HostRoom() {
         <section className="card">
           <div className="card-header">
             <h2>Lobby</h2>
-            <button onClick={() => send({ type: "host.start", code })} disabled={players.length < 1}>
+            <button onClick={startRound} disabled={players.length < 1 || !channel}>
               Start Round
             </button>
           </div>
@@ -85,7 +155,7 @@ export default function HostRoom() {
         <section className="card">
           <div className="card-header">
             <h2>Word Wall</h2>
-            <button onClick={() => send({ type: "host.start", code })}>New Prompt</button>
+            <button onClick={startRound}>New Prompt</button>
           </div>
           <p className="prompt">{state.prompt}</p>
           {submittedCount === 0 ? (
