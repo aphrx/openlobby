@@ -66,20 +66,13 @@ export default function HostRoom() {
       const name = data?.name?.trim();
       if (!playerId || !name) return;
       updateState((current) => {
-        const base =
-          current ??
-          ({
-            phase: "lobby",
-            code,
-            players: [],
-          } as const);
-        if (base.players.some((p) => p.id === playerId)) return base;
-        if (base.players.length >= 2) return base;
-        const nextPlayers = [...base.players, { id: playerId, name }];
-        if (base.phase === "lobby") {
-          return { ...base, players: nextPlayers };
+        if (!current || current.phase === "lobby") {
+          const base = current ?? { phase: "lobby", code, players: [] };
+          if (base.players.some((p) => p.id === playerId)) return base;
+          if (base.players.length >= 2) return base;
+          return { ...base, players: [...base.players, { id: playerId, name }] };
         }
-        return { ...base, players: nextPlayers };
+        return current;
       });
     };
     const onMove = (msg: Types.Message) => {
